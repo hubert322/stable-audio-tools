@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 import numpy as np
 import io
@@ -130,6 +131,30 @@ def get_latent_filenames(
         _, files = fast_scandir(path, extensions)
         filenames.extend(files)
     return filenames
+
+class CustomMetadataWrapper:
+    def __init__(self, path):
+        self.path = path
+        self._fn = None
+
+    def __call__(self, *args, **kwargs):
+        if self._fn is None:
+            import importlib.util
+            import sys
+            import hashlib
+            
+            # Create a unique module name based on the path to avoid collisions
+            module_name = f"metadata_module_{hashlib.md5(self.path.encode()).hexdigest()}"
+            
+            if module_name not in sys.modules:
+                spec = importlib.util.spec_from_file_location(module_name, self.path)
+                metadata_module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = metadata_module
+                spec.loader.exec_module(metadata_module)
+            
+            self._fn = sys.modules[module_name].get_custom_metadata
+            
+        return self._fn(*args, **kwargs)
 
 class LocalDatasetConfig:
     def __init__(
@@ -827,11 +852,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
             custom_metadata_module_path = audio_dir_config.get("custom_metadata_module", None)
 
             if custom_metadata_module_path is not None:
-                spec = importlib.util.spec_from_file_location("metadata_module", custom_metadata_module_path)
-                metadata_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(metadata_module)                
-
-                custom_metadata_fn = metadata_module.get_custom_metadata
+                custom_metadata_fn = CustomMetadataWrapper(custom_metadata_module_path)
 
             configs.append(
                 LocalDatasetConfig(
@@ -850,7 +871,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
         )
 
         return torch.utils.data.DataLoader(train_set, batch_size, shuffle=shuffle,
-                                num_workers=num_workers, persistent_workers=True, pin_memory=True, drop_last=dataset_config.get("drop_last", True), collate_fn=collation_fn)
+                                num_workers=num_workers, persistent_workers=(num_workers > 0), pin_memory=True, drop_last=dataset_config.get("drop_last", True), collate_fn=collation_fn)
 
     elif dataset_type == "pre_encoded":
 
@@ -874,11 +895,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
             custom_metadata_module_path = pre_encoded_dir_config.get("custom_metadata_module", None)
 
             if custom_metadata_module_path is not None:
-                spec = importlib.util.spec_from_file_location("metadata_module", custom_metadata_module_path)
-                metadata_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(metadata_module)                
-
-                custom_metadata_fn = metadata_module.get_custom_metadata
+                custom_metadata_fn = CustomMetadataWrapper(custom_metadata_module_path)
 
             configs.append(
                 LocalDatasetConfig(
@@ -900,7 +917,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
         )
 
         return torch.utils.data.DataLoader(train_set, batch_size, shuffle=shuffle,
-                                num_workers=num_workers, persistent_workers=True, pin_memory=True, drop_last=dataset_config.get("drop_last", True), collate_fn=collation_fn)
+                                num_workers=num_workers, persistent_workers=(num_workers > 0), pin_memory=True, drop_last=dataset_config.get("drop_last", True), collate_fn=collation_fn)
 
     elif dataset_type in ["s3", "wds"]: # Support "s3" type for backwards compatibility
         wds_configs = []
@@ -911,11 +928,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
             custom_metadata_module_path = wds_config.get("custom_metadata_module", None)
 
             if custom_metadata_module_path is not None:
-                spec = importlib.util.spec_from_file_location("metadata_module", custom_metadata_module_path)
-                metadata_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(metadata_module)                
-
-                custom_metadata_fn = metadata_module.get_custom_metadata
+                custom_metadata_fn = CustomMetadataWrapper(custom_metadata_module_path)
 
             if "s3_path" in wds_config:
 
@@ -950,7 +963,7 @@ def create_dataloader_from_config(dataset_config, batch_size, sample_size, sampl
             volume_norm=dataset_config.get("volume_norm", False),
             volume_norm_param=dataset_config.get("volume_norm_param", [-16, 2]),
             num_workers=num_workers,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0),
             pin_memory=True,
             force_channels=force_channels,
             epoch_steps=dataset_config.get("epoch_steps", 2000),

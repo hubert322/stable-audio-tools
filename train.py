@@ -82,6 +82,23 @@ def main():
 
     training_wrapper = create_training_wrapper_from_config(model_config, model)
 
+    # Patch for padding_mask shape issue in stable-audio-tools 0.0.19
+    from types import MethodType
+    def patch_step(original_step):
+        def fixed_step(self, batch, *args, **kwargs):
+            _, metadata = batch
+            if isinstance(metadata, (list, tuple)):
+                for md in metadata:
+                    if "padding_mask" in md and isinstance(md["padding_mask"], torch.Tensor) and md["padding_mask"].ndim == 1:
+                        md["padding_mask"] = md["padding_mask"].unsqueeze(0)
+            return original_step(batch, *args, **kwargs)
+        return fixed_step
+
+    training_wrapper.training_step = MethodType(patch_step(training_wrapper.training_step), training_wrapper)
+
+    if hasattr(training_wrapper, "validation_step"):
+        training_wrapper.validation_step = MethodType(patch_step(training_wrapper.validation_step), training_wrapper)
+
     exc_callback = ExceptionCallback()
 
     if args.logger == 'wandb':
@@ -147,7 +164,7 @@ def main():
 
     trainer = pl.Trainer(
         devices="auto",
-        accelerator="gpu",
+        accelerator="auto",
         num_nodes = args.num_nodes,
         strategy=strategy,
         precision=args.precision,
