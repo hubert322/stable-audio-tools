@@ -230,7 +230,8 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
             timestep_sampler_options: tp.Optional[tp.Dict[str, tp.Any]] = None,
             validation_timesteps = [0.1, 0.3, 0.5, 0.7, 0.9],
             p_one_shot: float = 0.0,
-            inpainting_config: dict = None
+            inpainting_config: dict = None,
+            snr_gamma: float = None
     ):
         super().__init__()
 
@@ -267,11 +268,14 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
 
         self.diffusion_objective = model.diffusion_objective
 
+        self.snr_gamma = snr_gamma
+
         self.loss_modules = [
             MSELoss("output",
                    "targets",
                    weight=1.0,
                    mask_key="padding_mask" if self.mask_padding else None,
+                   weights_key="loss_weights" if self.snr_gamma is not None else None,
                    name="mse_loss"
             )
         ]
@@ -418,6 +422,15 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
             targets = noise * alphas - diffusion_input * sigmas
         elif self.diffusion_objective in ["rectified_flow", "rf_denoiser"]:
             targets = noise - diffusion_input
+
+        # Compute SNR weighting if configured
+        if self.snr_gamma is not None:
+            snr = (alphas ** 2) / (sigmas ** 2)
+            if self.diffusion_objective == "v":
+                loss_weights = torch.clamp(snr, max=self.snr_gamma) / (snr + 1)
+            else:
+                loss_weights = torch.ones_like(snr)
+            loss_info["loss_weights"] = loss_weights.squeeze()
 
         p.tick("noise")
 

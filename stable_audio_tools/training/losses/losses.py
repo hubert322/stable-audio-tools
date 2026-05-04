@@ -64,16 +64,26 @@ class L1Loss(LossModule):
         return self.weight * l1_loss
 
 class MSELoss(LossModule):
-    def __init__(self, key_a: str, key_b: str, weight: float = 1.0, mask_key: str = None, name: str = 'mse_loss',decay = 1.0):
+    def __init__(self, key_a: str, key_b: str, weight: float = 1.0, mask_key: str = None, weights_key: str = None, name: str = 'mse_loss',decay = 1.0):
         super().__init__(name=name, weight=weight, decay=decay)
 
         self.key_a = key_a
         self.key_b = key_b
 
         self.mask_key = mask_key
+        self.weights_key = weights_key
 
     def forward(self, info):
         mse_loss = F.mse_loss(info[self.key_a], info[self.key_b], reduction='none')
+
+        if self.weights_key is not None and self.weights_key in info and info[self.weights_key] is not None:
+            batch_weights = info[self.weights_key]
+            
+            # Broadcast batch_weights to match mse_loss dimensions
+            while batch_weights.ndim < mse_loss.ndim:
+                batch_weights = batch_weights.unsqueeze(-1)
+                
+            mse_loss = mse_loss * batch_weights
 
         if self.mask_key is not None and self.mask_key in info and info[self.mask_key] is not None:
             mask = info[self.mask_key]
