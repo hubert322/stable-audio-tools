@@ -369,7 +369,7 @@ class DiffusionCondTrainingWrapper(pl.LightningModule):
             self.diffusion.pretransform.to(self.device)
 
             if not self.pre_encoded:
-                with torch.cuda.amp.autocast() and torch.set_grad_enabled(self.diffusion.pretransform.enable_grad):
+                with torch.cuda.amp.autocast(), torch.set_grad_enabled(self.diffusion.pretransform.enable_grad):
                     self.diffusion.pretransform.train(self.diffusion.pretransform.enable_grad)
 
                     diffusion_input = self.diffusion.pretransform.encode(diffusion_input)
@@ -715,9 +715,9 @@ class DiffusionCondDemoCallback(pl.Callback):
                     model = module.diffusion_ema.ema_model if module.diffusion_ema is not None else module.diffusion.model
 
                     if module.diffusion_objective == "v":
-                        fakes = sample(model, noise, self.demo_steps, 0, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample(model, noise, self.demo_steps, 0, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                     elif module.diffusion_objective == "rectified_flow":
-                        fakes = sample_discrete_euler(model, noise, self.demo_steps, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample_discrete_euler(model, noise, self.demo_steps, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                     elif module.diffusion_objective == "rf_denoiser":
                         logsnr = torch.linspace(-6, 2, self.demo_steps+1).to(module.device)
                         sigmas = torch.sigmoid(-logsnr)
@@ -725,7 +725,7 @@ class DiffusionCondDemoCallback(pl.Callback):
                         sigmas[0] = 1.0
                         sigmas[-1] = 0.0
 
-                        fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                         
 
                     if module.diffusion.pretransform is not None:
@@ -894,9 +894,9 @@ class DiffusionCondInpaintDemoCallback(pl.Callback):
 
                 with torch.cuda.amp.autocast():
                     if module.diffusion_objective == "v":
-                        fakes = sample(model, noise, self.demo_steps, 0, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample(model, noise, self.demo_steps, 0, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                     elif module.diffusion_objective == "rectified_flow":
-                        fakes = sample_discrete_euler(model, noise, self.demo_steps, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample_discrete_euler(model, noise, self.demo_steps, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                     elif module.diffusion_objective == "rf_denoiser":
                         logsnr = torch.linspace(-6, 2, self.demo_steps+1).to(module.device)
                         sigmas = torch.sigmoid(-logsnr)
@@ -904,7 +904,7 @@ class DiffusionCondInpaintDemoCallback(pl.Callback):
                         sigmas[0] = 1.0
                         sigmas[-1] = 0.0
 
-                        fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True)
+                        fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
 
                 if module.diffusion.pretransform is not None:
                     fakes = module.diffusion.pretransform.decode(fakes)
