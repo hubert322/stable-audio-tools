@@ -23,6 +23,7 @@ class ModelConfigEmbedderCallback(pl.Callback):
 
 def main():
     torch.multiprocessing.set_sharing_strategy('file_system')
+    torch.set_float32_matmul_precision('medium')
     args = get_all_args()
     seed = args.seed
 
