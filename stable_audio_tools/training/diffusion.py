@@ -726,10 +726,12 @@ class DiffusionCondDemoCallback(pl.Callback):
                         sigmas[-1] = 0.0
 
                         fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
-                        
 
-                    if module.diffusion.pretransform is not None:
-                        fakes = module.diffusion.pretransform.decode(fakes)
+                # Decode VAE outside autocast so it always runs in float32.
+                # The oobleck decoder (weight_norm + snake activations) can overflow bf16,
+                # causing NaN/Inf and square-wave audio artifacts.
+                if module.diffusion.pretransform is not None:
+                    fakes = module.diffusion.pretransform.decode(fakes.float())
 
                 # Put the demos together
                 fakes = rearrange(fakes, 'b d n -> d (b n)')
