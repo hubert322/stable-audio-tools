@@ -727,11 +727,15 @@ class DiffusionCondDemoCallback(pl.Callback):
 
                         fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
 
-                # Decode VAE outside autocast so it always runs in float32.
-                # The oobleck decoder (weight_norm + snake activations) can overflow bf16,
-                # causing NaN/Inf and square-wave audio artifacts.
+                # Decode VAE with autocast explicitly disabled so it always runs in float32.
+                # The oobleck decoder (weight_norm + snake activations) overflows in fp16/bf16,
+                # producing NaN/Inf which causes square-wave audio artifacts.
                 if module.diffusion.pretransform is not None:
-                    fakes = module.diffusion.pretransform.decode(fakes.float())
+                    fakes_f32 = fakes.float()
+                    print(f"[demo] latent stats before decode: min={fakes_f32.min():.3f} max={fakes_f32.max():.3f} std={fakes_f32.std():.3f} nan={fakes_f32.isnan().any()} inf={fakes_f32.isinf().any()}")
+                    with torch.amp.autocast("cuda", enabled=False):
+                        fakes = module.diffusion.pretransform.decode(fakes_f32)
+                    print(f"[demo] audio stats after decode:   min={fakes.min():.3f} max={fakes.max():.3f} std={fakes.std():.3f} nan={fakes.isnan().any()} inf={fakes.isinf().any()}")
 
                 # Put the demos together
                 fakes = rearrange(fakes, 'b d n -> d (b n)')
