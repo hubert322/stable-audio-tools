@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from ..interface.aeiou import pca_point_cloud, audio_spectrogram_image, tokens_spectrogram_image
-from ..inference.sampling import get_alphas_sigmas, sample, sample_discrete_euler, sample_flow_pingpong, truncated_logistic_normal_rescaled, DistributionShift, sample_timesteps_logsnr
+from ..inference.sampling import get_alphas_sigmas, sample, sample_k, sample_discrete_euler, sample_flow_pingpong, truncated_logistic_normal_rescaled, DistributionShift, sample_timesteps_logsnr
 from ..models.diffusion import DiffusionModelWrapper, ConditionedDiffusionModelWrapper
 from ..models.autoencoders import DiffusionAutoencoder
 from ..models.inpainting import random_inpaint_mask
@@ -665,6 +665,13 @@ class DiffusionCondDemoCallback(pl.Callback):
 
         noise = torch.randn([self.num_demos, module.diffusion.io_channels, demo_samples]).to(module.device)
 
+        # Disable TF32 for demo generation — matches generate_diffusion_cond() in inference.
+        # TF32 reduces mantissa precision in large matmuls causing audible distortion.
+        _tf32_matmul = torch.backends.cuda.matmul.allow_tf32
+        _tf32_cudnn = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
         try:
             print("Getting conditioning")
             with torch.cuda.amp.autocast():
@@ -711,13 +718,19 @@ class DiffusionCondDemoCallback(pl.Callback):
 
                 print(f"Generating demo for cfg scale {cfg_scale}")
 
-                with torch.cuda.amp.autocast():
-                    model = module.diffusion_ema.ema_model if module.diffusion_ema is not None else module.diffusion.model
+                model = module.diffusion_ema.ema_model if module.diffusion_ema is not None else module.diffusion.model
 
+                # Cast noise and cond_inputs to match model dtype (matches generate_diffusion_cond)
+                model_dtype = next(model.parameters()).dtype
+                noise_typed = noise.type(model_dtype)
+                cond_inputs_typed = {k: v.type(model_dtype) if isinstance(v, torch.Tensor) else v for k, v in cond_inputs.items()}
+
+                with torch.cuda.amp.autocast():
                     if module.diffusion_objective == "v":
-                        fakes = sample(model, noise, self.demo_steps, 0, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
+                        # Use sample_k to match the inference pipeline (generate_diffusion_cond uses sample_k)
+                        fakes = sample_k(model, noise_typed, None, self.demo_steps, **cond_inputs_typed, cfg_scale=cfg_scale, batch_cfg=True, rescale_cfg=True, device=module.device)
                     elif module.diffusion_objective == "rectified_flow":
-                        fakes = sample_discrete_euler(model, noise, self.demo_steps, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
+                        fakes = sample_discrete_euler(model, noise_typed, self.demo_steps, **cond_inputs_typed, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
                     elif module.diffusion_objective == "rf_denoiser":
                         logsnr = torch.linspace(-6, 2, self.demo_steps+1).to(module.device)
                         sigmas = torch.sigmoid(-logsnr)
@@ -725,7 +738,7 @@ class DiffusionCondDemoCallback(pl.Callback):
                         sigmas[0] = 1.0
                         sigmas[-1] = 0.0
 
-                        fakes = sample_flow_pingpong(model, noise, sigmas=sigmas, **cond_inputs, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
+                        fakes = sample_flow_pingpong(model, noise_typed, sigmas=sigmas, **cond_inputs_typed, cfg_scale=cfg_scale, dist_shift=module.diffusion.dist_shift, batch_cfg=True, scale_phi=0.7)
 
                 # Decode VAE with autocast explicitly disabled so it always runs in float32.
                 # The oobleck decoder (weight_norm + snake activations) overflows in fp16/bf16,
@@ -810,6 +823,9 @@ class DiffusionCondDemoCallback(pl.Callback):
         except Exception as e:
             raise e
         finally:
+            # Restore TF32 settings
+            torch.backends.cuda.matmul.allow_tf32 = _tf32_matmul
+            torch.backends.cudnn.allow_tf32 = _tf32_cudnn
             gc.collect()
             torch.cuda.empty_cache()
             module.train()
